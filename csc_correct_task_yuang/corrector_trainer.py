@@ -66,7 +66,8 @@ class CSCCorrectTask(pl.LightningModule):
                                                                      config=self.bert_config,
                                                                      mlp=False if self.args.classifier=="single" else True)
         self.CRF_layer = DynamicCRF(self.num_labels)
-        self.loss_type = args.loss_type  # todo: 补充args中的参数
+        self.loss_type = args.loss_type  # one of CRF/FC_CRF
+        self.gamma = args.gamma
 
         self.ner_evaluation_metric = MetricForCSC_Corrector(entity_labels=self.detect_labels, save_prediction=self.args.save_ner_prediction)
 
@@ -77,7 +78,6 @@ class CSCCorrectTask(pl.LightningModule):
 
     def configure_optimizers(self):
         """Prepare optimizer and schedule (linear warmup and decay)"""
-        # todo: 更新crf层参数
         no_decay = ["bias", "LayerNorm.weight"]
         model_params = list(self.model.named_parameters()) + \
                        list(self.CRF_layer.named_parameters()) if 'CRF' in self.loss_type else list(self.model.named_parameters())
@@ -118,35 +118,71 @@ class CSCCorrectTask(pl.LightningModule):
 
         return sequence_logits, decode_result
 
-    def compute_loss(self, logits, labels, loss_mask=None):
+    def focal_loss(self, logits, labels, loss_mask, gamma=None, avg=True):
+        '''
+        Desc:
+            compute focal loss
+        Args:
+            logits: FloatTensor, shape of [batch_size, sequence_len, num_labels]
+            labels: LongTensor, shape of [batch_size, sequence_len]
+            loss_mask: Optional[LongTensor], shape of [batch_size, sequence_len].
+                1 for non-PAD tokens, 0 for PAD tokens.
+            gamma: hard sample param in Focal Loss.
+        '''
+        if gamma is None:
+            gamma = 2
+        probs = torch.softmax(logits, -1)
+        p = torch.gather(probs, 2, labels.view(labels.size(0), labels.size(1), 1))  # [batch, seq_len, num_labels]
+        g = (1 - torch.clamp(p, min=0.01, max=0.99)) ** gamma
+        cost = -g * torch.log(p + 1e-8)
+        cost = cost.view(labels.shape)
+        loss_mask = loss_mask.view(labels.shape)
+        if avg:
+            cost = torch.sum(cost * loss_mask, 1) / torch.sum(loss_mask, 1)
+        else:
+            cost = torch.sum(cost * loss_mask, 1)
+        cost = cost.view((labels.size(0), -1))
+        return torch.mean(cost), g.view(labels.shape)
+
+    def compute_loss(self, logits, labels, loss_mask=None, gamma=None):
         """
         Desc:
             compute cross entropy loss
-            todo: add focal loss !
         Args:
             logits: FloatTensor, shape of [batch_size, sequence_len, num_labels]
-            labels: LongTensor, shape of [batch_size, sequence_len, num_labels]
+            labels: LongTensor, shape of [batch_size, sequence_len]
             loss_mask: Optional[LongTensor], shape of [batch_size, sequence_len].
                 1 for non-PAD tokens, 0 for PAD tokens.
+
+        ----------
         """
+        # cross entropy loss
         loss_fct = CrossEntropyLoss()
         if loss_mask is not None:
-            active_loss = loss_mask.view(-1) == 1
-            active_logits = logits.view(-1, self.num_labels)
-            active_labels = torch.where(
-                active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
-            )
-            loss = loss_fct(active_logits, active_labels)
+            if 'FC' in self.loss_type:
+                loss_ce, _ = self.focal_loss(logits, labels, loss_mask, gamma=gamma)
+            else:
+                active_loss = loss_mask.view(-1) == 1
+                active_logits = logits.view(-1, self.num_labels)
+                active_labels = torch.where(
+                    active_loss, labels.view(-1), torch.tensor(loss_fct.ignore_index).type_as(labels)
+                )
+                loss_ce = loss_fct(active_logits, active_labels)
         else:
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            loss_ce = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
         # crf loss
-        loss_crf = -self.CRF_layer(logits, labels, mask=loss_mask.byte(), reduction='token_mean')
-
-        if 'CRF' in self.loss_type:
-            return loss + loss_crf
+        if 'FC' in self.loss_type:
+            loss_crf = -self.CRF_layer(logits, labels, mask=loss_mask.byte(), reduction='token_mean',
+                                       g=None, gamma=gamma)
         else:
-            return loss
+            loss_crf = -self.CRF_layer(logits, labels, mask=loss_mask.byte(), reduction='token_mean')
+
+        # merge loss
+        if 'CRF' in self.loss_type:
+            return loss_ce + loss_crf
+        else:
+            return loss_ce
 
     def training_step(self, batch, batch_idx):
         input_ids, pinyin_ids, labels = batch
@@ -154,7 +190,7 @@ class CSCCorrectTask(pl.LightningModule):
         batch_size, seq_len = input_ids.shape
         pinyin_ids = pinyin_ids.view(batch_size, seq_len, 8)
         sequence_logits, decode_result = self.forward(input_ids=input_ids, pinyin_ids=pinyin_ids,)
-        loss = self.compute_loss(sequence_logits, labels, loss_mask=loss_mask)
+        loss = self.compute_loss(sequence_logits, labels, loss_mask=loss_mask, gamma=self.gamma)
 
         tf_board_logs = {
             "train_loss": loss,
@@ -284,7 +320,8 @@ def get_parser():
     parser.add_argument("--save_ner_prediction", action="store_true", help="only work for test.")
     parser.add_argument("--path_to_model_hparams_file", default="", type=str, help="use for evaluation")
     parser.add_argument("--checkpoint_path", default="", type=str, help="use for evaluation.")
-    parser.add_argument("--loss_type", default="CRF", type=str, help="use for loss type chosen.")
+    parser.add_argument("--loss_type", default="FC_CRF", type=str, help="use for loss type chosen.")
+    parser.add_argument("--gamma", type=float, default=0.5, help="use for focal loss.")
 
     return parser
 
