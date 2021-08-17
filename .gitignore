@@ -1,0 +1,8 @@
+# ChineseBase Model
+ChineseBERT-base/
+
+# Trained Detector Model
+csc_detect_task_yuang/output/*
+
+# Trained Corrector Model
+csc_correct_task_yuang/results/*
