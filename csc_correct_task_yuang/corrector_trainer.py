@@ -79,15 +79,21 @@ class CSCCorrectTask(pl.LightningModule):
     def configure_optimizers(self):
         """Prepare optimizer and schedule (linear warmup and decay)"""
         no_decay = ["bias", "LayerNorm.weight"]
-        model_params = list(self.model.named_parameters()) + \
-                       list(self.CRF_layer.named_parameters()) if 'CRF' in self.loss_type else list(self.model.named_parameters())
+        bert_model_params = list(self.model.named_parameters())
+        crf_model_params = list(self.CRF_layer.named_parameters())
+        total_model_params = bert_model_params + crf_model_params
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in model_params if not any(nd in n for nd in no_decay)],
+                "params": [p for n, p in bert_model_params if not any(nd in n for nd in no_decay)],
                 "weight_decay": self.args.weight_decay,
             },
             {
-                "params": [p for n, p in model_params if any(nd in n for nd in no_decay)],
+                "params": [p for n, p in crf_model_params if not any(nd in n for nd in no_decay)],
+                "weight_decay": self.args.weight_decay,
+                "lr": self.args.crf_lr,
+            },
+            {
+                "params": [p for n, p in total_model_params if any(nd in n for nd in no_decay)],
                 "weight_decay": 0.0,
             },
         ]
@@ -151,10 +157,8 @@ class CSCCorrectTask(pl.LightningModule):
         Args:
             logits: FloatTensor, shape of [batch_size, sequence_len, num_labels]
             labels: LongTensor, shape of [batch_size, sequence_len]
-            loss_mask: Optional[LongTensor], shape of [batch_size, sequence_len].
+            loss_mask: Optional[qLongTensor], shape of [batch_size, sequence_len].
                 1 for non-PAD tokens, 0 for PAD tokens.
-
-        ----------
         """
         # cross entropy loss
         loss_fct = CrossEntropyLoss()
@@ -322,6 +326,7 @@ def get_parser():
     parser.add_argument("--checkpoint_path", default="", type=str, help="use for evaluation.")
     parser.add_argument("--loss_type", default="FC_CRF", type=str, help="use for loss type chosen.")
     parser.add_argument("--gamma", type=float, default=0.5, help="use for focal loss.")
+    parser.add_argument("--crf_lr", type=float, default=1e-2, help="use for focal loss.")
 
     return parser
 
