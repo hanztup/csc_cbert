@@ -22,7 +22,7 @@ class SpanF1ForNER(TensorMetric):
         super(SpanF1ForNER, self).__init__(name="span_f1_for_ner", reduce_group=reduce_group, reduce_op=reduce_op)
         self.num_labels = len(entity_labels)
         self.entity_labels = entity_labels
-        self.tags2label = {label_idx : label_item for label_idx, label_item in enumerate(entity_labels)}
+        self.tags2label = {label_idx: label_item for label_idx, label_item in enumerate(entity_labels)}
         self.save_prediction = save_prediction
         if save_prediction:
             self.pred_entity_lst = []
