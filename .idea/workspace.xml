@@ -1,17 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="bcf63acc-3284-4067-9244-fb3836ac7f8f" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/csc_detect_task_promotion_yuang/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/csc_detect_task_promotion_yuang/detector_trainer.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/csc_detect_task_promotion_yuang/dev.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/csc_detect_task_promotion_yuang/infer.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/csc_detect_task_promotion_yuang/train.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/datasets/csc_dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/datasets/csc_dataset.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/crf_layer.py" beforeDir="false" afterPath="$PROJECT_DIR$/models/crf_layer.py" afterDir="false" />
-    </list>
+    <list default="true" id="bcf63acc-3284-4067-9244-fb3836ac7f8f" name="Default Changelist" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
