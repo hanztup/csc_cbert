@@ -1,11 +1,20 @@
 # configure
-.idea/
+.idea/*
+.DS_Store
 
 # ChineseBase Model
 ChineseBERT-base/
+
+# Training Logs
+lightning_logs/*
 
 # Trained Detector Model
 csc_detect_task_yuang/output/*
 
 # Trained Corrector Model
 csc_correct_task_yuang/results/*
+
+# Trained Detector Promotion Model
+csc_detect_task_promotion_yuang/results/*
+csc_detect_task_promotion_yuang/data/*
+
