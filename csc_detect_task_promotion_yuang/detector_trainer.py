@@ -26,7 +26,7 @@ from datasets.csc_dataset import CSC_Detect_Dataset, DetectorDataset
 from models.modeling_glycebert import GlyceBertForTokenClassification
 from models.crf_layer import CRF
 from utils.random_seed import set_random_seed
-from metrics.ner import SpanF1ForNER
+from metrics.csc_metric import MetricForCSC_Detector
 
 # enable reproducibility
 # https://pytorch-lightning.readthedocs.io/en/latest/trainer.html
@@ -70,8 +70,8 @@ class CSCDetectTask(pl.LightningModule):
         # crf
         self.crf = CRF(num_tags=self.num_labels, batch_first=True)
 
-        self.ner_evaluation_metric = SpanF1ForNER(entity_labels=self.detect_labels,
-                                                  save_prediction=self.args.save_ner_prediction)
+        self.ner_evaluation_metric = MetricForCSC_Detector(entity_labels=self.detect_labels,
+                                                           save_prediction=self.args.save_ner_prediction)
 
         format = '%(asctime)s - %(name)s - %(message)s'
         logging.basicConfig(format=format, filename=os.path.join(self.args.save_path, "eval_result_log.txt"), level=logging.INFO)
@@ -171,15 +171,18 @@ class CSCDetectTask(pl.LightningModule):
         pinyin_ids = pinyin_ids.view(batch_size, seq_len, 8)
         sequence_logits = self.forward(input_ids=input_ids, pinyin_ids=pinyin_ids,)[0]
         loss = self.compute_loss(sequence_logits, gold_labels, loss_mask=loss_mask)
-        probabilities, argmax_labels = self.postprocess_logits_to_labels(sequence_logits.view(batch_size, seq_len, -1))
-        confusion_matrix = self.ner_evaluation_metric(argmax_labels, gold_labels, sequence_mask=loss_mask)
+        pred_labels = self.postprocess_logits_to_labels(sequence_logits.view(batch_size, seq_len, -1), sequence_mask=loss_mask)
+        confusion_matrix = self.ner_evaluation_metric(pred_labels, gold_labels, sequence_mask=loss_mask)
         return {"val_loss": loss, "confusion_matrix": confusion_matrix}
 
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x["val_loss"] for x in outputs]).mean()
         confusion_matrix = torch.stack([x[f"confusion_matrix"] for x in outputs]).sum(0)
-        all_true_positive, all_false_positive, all_false_negative = confusion_matrix
-        precision, recall, f1 = self.ner_evaluation_metric.compute_f1_using_confusion_matrix(all_true_positive, all_false_positive, all_false_negative)
+        all_pp, all_rr, all_ff = confusion_matrix
+        sample_nums = len(outputs) * self.args.eval_batch_size
+        precision = all_pp / sample_nums
+        recall = all_rr / sample_nums
+        f1 = all_ff / sample_nums
 
         self.result_logger.info(f"EVAL INFO -> current_epoch is: {self.trainer.current_epoch}, current_global_step is: {self.trainer.global_step} ")
         self.result_logger.info(f"EVAL INFO -> valid_f1 is: {f1}")
@@ -228,48 +231,48 @@ class CSCDetectTask(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         input_ids, pinyin_ids, gold_labels = batch
-        sequence_mask = (input_ids != 0).long()
+        loss_mask = (input_ids != 0).long()
         batch_size, seq_len = input_ids.shape
         pinyin_ids = pinyin_ids.view(batch_size, seq_len, 8)
         sequence_logits = self.forward(input_ids=input_ids, pinyin_ids=pinyin_ids,)[0]
-        probabilities, argmax_labels = self.postprocess_logits_to_labels(sequence_logits.view(batch_size, seq_len, -1))
-        confusion_matrix = self.ner_evaluation_metric(argmax_labels, gold_labels, sequence_mask=sequence_mask)
+        pred_labels = self.postprocess_logits_to_labels(sequence_logits.view(batch_size, seq_len, -1), sequence_mask=loss_mask)
+        confusion_matrix = self.ner_evaluation_metric(pred_labels, gold_labels, sequence_mask=loss_mask)
         return {"confusion_matrix": confusion_matrix}
 
     def test_epoch_end(self, outputs):
         confusion_matrix = torch.stack([x[f"confusion_matrix"] for x in outputs]).sum(0)
-        all_true_positive, all_false_positive, all_false_negative = confusion_matrix
+        all_pp, all_rr, all_ff = confusion_matrix
+        sample_nums = len(outputs) * self.args.eval_batch_size
+        precision = all_pp / sample_nums
+        recall = all_rr / sample_nums
+        f1 = all_ff / sample_nums
 
         if self.args.save_ner_prediction:
-            precision, recall, f1, entity_tuple = self.ner_evaluation_metric.compute_f1_using_confusion_matrix(all_true_positive, all_false_positive, all_false_negative, prefix="test")
-            gold_entity_lst, pred_entity_lst = entity_tuple
+            gold_entity_lst, pred_entity_lst = self.ner_evaluation_metric.gold_entity_lst, self.ner_evaluation_metric.pred_entity_lst
             self.save_predictions_to_file(gold_entity_lst, pred_entity_lst)
-        else:
-            precision, recall, f1 = self.ner_evaluation_metric.compute_f1_using_confusion_matrix(all_true_positive, all_false_positive, all_false_negative)
 
         tensorboard_logs = {"test_f1": f1,}
         self.result_logger.info(f"TEST RESULT -> TEST F1: {f1}, Precision: {precision}, Recall: {recall} ")
         return {"test_log": tensorboard_logs, "test_f1": f1, "test_precision": precision, "test_recall": recall}
 
-    def postprocess_logits_to_labels(self, logits):
+    def postprocess_logits_to_labels(self, logits, sequence_mask):
         """input logits should in the shape [batch_size, seq_len, num_labels]"""
-        probabilities = F.softmax(logits, dim=2) # shape of [batch_size, seq_len, num_labels]
-        argmax_labels = torch.argmax(probabilities, 2, keepdim=False) # shape of [batch_size, seq_len]
-        return probabilities, argmax_labels
+        # softmax results
+        # probabilities = F.softmax(logits, dim=2) # shape of [batch_size, seq_len, num_labels]
+        # argmax_labels = torch.argmax(probabilities, 2, keepdim=False) # shape of [batch_size, seq_len]
+        # return probabilities, argmax_labels
+
+        # viterbi results
+        tags = self.crf.decode(logits, sequence_mask).squeeze(0)
+        return tags
 
     def save_predictions_to_file(self, gold_entity_lst, pred_entity_lst, prefix="test_sighan15"):
-        dataset = self._load_dataset(prefix=prefix)
-        data_items = dataset.data_items
-
         save_file_path = os.path.join(self.args.save_path, "test_predictions.txt")
         print(f"INFO -> write predictions to {save_file_path}")
         with open(save_file_path, "w") as f:
-            for gold_label_item, pred_label_item, data_item in zip(gold_entity_lst, pred_entity_lst, data_items):
-                data_tokens = data_item[0]
-                f.write("=!"* 20+"\n")
-                f.write("".join(data_tokens)+"\n")
-                f.write(str(gold_label_item)+"\n")
-                f.write(str(pred_label_item)+"\n")
+            for gold_label_item, pred_label_item in zip(gold_entity_lst, pred_entity_lst):
+                f.write(str(pred_label_item) + "\t" + str(gold_label_item) + '\n')
+        return
 
 
 def get_parser():

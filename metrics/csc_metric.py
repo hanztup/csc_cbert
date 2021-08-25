@@ -170,6 +170,98 @@ class MetricForCSC_Corrector(TensorMetric):
         return precision, recall, f1
 
 
+class MetricForCSC_Detector(TensorMetric):
+    """
+    compute span-level F1 scores for named entity recognition task (CGED).
+    """
+    def __init__(self, entity_labels: List[str] = None, reduce_group: Any = None, reduce_op: Any = None, save_prediction = False):
+        super(MetricForCSC_Detector, self).__init__(name="metric_for_csc_detector", reduce_group=reduce_group, reduce_op=reduce_op)
+        self.num_labels = len(entity_labels)
+        self.entity_labels = entity_labels
+        self.tags2label = {label_idx: label_item for label_idx, label_item in enumerate(entity_labels)}
+        self.save_prediction = save_prediction
+        if save_prediction:
+            self.pred_entity_lst = []
+            self.gold_entity_lst = []
+
+    def forward(self, pred_sequence_labels, gold_sequence_labels, sequence_mask=None):
+        """
+        Args:
+            pred_sequence_labels: torch.LongTensor, shape of [batch_size, sequence_len]
+            gold_sequence_labels: torch.LongTensor, shape of [batch_size, sequence_len]
+            sequence_mask: Optional[torch.LongTensor], shape of [batch_size, sequence_len].
+                        1 for non-[PAD] tokens; 0 for [PAD] tokens
+        """
+        pp, rr, ff = 0., 0., 0.
+        pred_sequence_labels = pred_sequence_labels.to("cpu").numpy().tolist()
+        gold_sequence_labels = gold_sequence_labels.to("cpu").numpy().tolist()
+        if sequence_mask is not None:
+            sequence_mask = sequence_mask.to("cpu").numpy().tolist()
+            # [1, 1, 1, 0, 0, 0]
+
+        for item_idx, (pred_label_item, gold_label_item) in enumerate(zip(pred_sequence_labels, gold_sequence_labels)):
+            if sequence_mask is not None:
+                sequence_mask_item = sequence_mask[item_idx]
+                try:
+                    token_end_pos = sequence_mask_item.index(0) - 1 # before [PAD] always has an [SEP] token.
+                except:
+                    token_end_pos = len(sequence_mask_item)
+            else:
+                token_end_pos = len(gold_label_item)
+
+            pred_label_item = pred_label_item[1:token_end_pos]
+            gold_label_item = gold_label_item[1:token_end_pos]
+
+            pred_entities = ' '.join([self.tags2label[tmp] for tmp in pred_label_item])
+            gold_entities = ' '.join([self.tags2label[tmp] for tmp in gold_label_item])
+
+            if self.save_prediction:
+                self.pred_entity_lst.append(pred_entities)
+                self.gold_entity_lst.append(gold_entities)
+
+            pi, ri, fi = count_confusion_matrix_for_detector(pred_label_item, gold_label_item)
+            pp += pi
+            rr += ri
+            ff += fi
+
+        batch_confusion_matrix = torch.LongTensor([pp, rr, ff])
+        return batch_confusion_matrix
+
+    def compute_f1_using_confusion_matrix(self, true_positive, false_positive, false_negative, prefix="dev"):
+        """
+        compute f1 scores.
+        Description:
+            f1: 2 * precision * recall / (precision + recall)
+                - precision = true_positive / true_positive + false_positive
+                - recall = true_positive / true_positive + false_negative
+        Returns:
+            precision, recall, f1
+        """
+        precision = true_positive / (true_positive + false_positive + 1e-13)
+        recall = true_positive / (true_positive + false_negative + 1e-13)
+        f1 = 2 * precision * recall / (precision + recall + 1e-13)
+
+        if self.save_prediction and prefix == "test":
+            entity_tuple = (self.gold_entity_lst, self.pred_entity_lst)
+            return precision, recall, f1, entity_tuple
+
+        return precision, recall, f1
+
+
+
+
+def count_confusion_matrix_for_detector(pred_labels, gold_labels):
+    acc = 0.
+    for i, (pred, gold) in enumerate(zip(pred_labels, gold_labels)):
+        if pred == gold:
+            acc += 1
+    pi = acc / (len(pred_labels) + 1e-13)
+    ri = acc / (len(gold_labels) + 1e-13)
+    fi = 2 * pi * ri / (pi + ri + 1e-13)
+
+    return pi, ri, fi
+
+
 def count_confusion_matrix_for_corrector(pred_labels, gold_labels):
     acc = 0.
     for i, (pred, gold) in enumerate(zip(pred_labels, gold_labels)):
